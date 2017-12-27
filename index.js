@@ -20,6 +20,8 @@ var fs = require('fs')
 var ms = require('ms')
 var parseUrl = require('parseurl')
 var path = require('path')
+var _ = require('underscore')
+var vhost = require('vhost')
 var resolve = path.resolve
 
 /**
@@ -36,34 +38,25 @@ module.exports = favicon
 
 var ONE_YEAR_MS = 60 * 60 * 24 * 365 * 1000 // 1 year
 
-/**
- * Serves the favicon located by the given `path`.
- *
- * @public
- * @param {String|Buffer} path
- * @param {Object} [options]
- * @return {Function} middleware
- */
-
-function favicon (path, options) {
-  var opts = options || {}
-
-  var icon // favicon cache
-  var maxAge = calcMaxAge(opts.maxAge)
-
-  if (!path) {
-    throw new TypeError('path to favicon.ico is required')
-  }
-
+function getFaviconInfo (path, maxAge) {
   if (Buffer.isBuffer(path)) {
-    icon = createIcon(Buffer.from(path), maxAge)
+    var icon = createIcon(Buffer.from(path), maxAge)
+    return {
+      icon: icon
+    }
   } else if (typeof path === 'string') {
     path = resolveSync(path)
+    return {
+      path: path,
+      maxAge: maxAge
+    }
   } else {
     throw new TypeError('path to favicon.ico must be string or buffer')
   }
+}
 
-  return function favicon (req, res, next) {
+function getFaviconHandler (faviconInfo) {
+  return _.bind(function favicon (faviconInfo, req, res, next) {
     if (parseUrl(req).pathname !== '/favicon.ico') {
       next()
       return
@@ -77,17 +70,49 @@ function favicon (path, options) {
       return
     }
 
-    if (icon) {
-      send(req, res, icon)
+    if (faviconInfo.icon) {
+      send(req, res, faviconInfo.icon)
       return
     }
 
-    fs.readFile(path, function (err, buf) {
+    fs.readFile(faviconInfo.path, function (err, buf) {
       if (err) return next(err)
-      icon = createIcon(buf, maxAge)
+      var icon = createIcon(buf, faviconInfo.maxAge)
       send(req, res, icon)
     })
+  }, null, faviconInfo)
+}
+
+/**
+ * Serves the favicon located by the given `path`.
+ *
+ * @public
+ * @param {String|Buffer} path
+ * @param {Object} [options]
+ * @return {Function} middleware
+ */
+
+function favicon (path, options) {
+  var opts = options || {}
+  var maxAge = calcMaxAge(opts.maxAge)
+
+  if (!path) {
+    throw new TypeError('path to favicon.ico is required')
   }
+
+  var filters = []
+  if (Buffer.isBuffer(path) || typeof path === 'string') {
+    filters.push(getFaviconHandler(getFaviconInfo(path, maxAge)))
+  } else if (typeof path === 'object') {
+    _.each(path, function (value, key) {
+      var handler = getFaviconHandler(getFaviconInfo(value, maxAge))
+      filters.push(vhost(key, handler))
+    })
+  } else {
+    throw new TypeError('path to favicon.ico must be string, buffer, or object')
+  }
+
+  return filters
 }
 
 /**
